@@ -13,6 +13,11 @@ type BypassClass = "A" | "B" | "C";
 
 const EXPECTED: Record<InventoryKind, Record<string, number>> = {
   credential: {
+    // #14715: flush-empty retry now resolves retry credentials with an explicit
+    // exclusion of the current connection and a managed-lease short-circuit.
+    // Keep this site inventoried so future edits cannot bypass the lease-aware
+    // empty-turn path in chatCore.
+    "open-sse/handlers/chatCore.ts": 1,
     // v3.8.51 #12867 (d6f315018): the two credential-resolution sites that used to
     // live in chatCore.ts (codex 429 and antigravity 422 account rotation) were
     // extracted into the provider execution pipeline. chatCore.ts now only hands
@@ -221,6 +226,7 @@ const CLASSIFICATION: Record<InventoryKind, Record<string, BypassClass>> = {
     Object.keys(EXPECTED.credential).map((file) => [
       file,
       file === "src/app/api/v1/session-leases/route.ts" ||
+      file === "open-sse/handlers/chatCore.ts" ||
       file === "src/sse/handlers/chat.ts" ||
       file === "src/sse/services/auth.ts"
         ? "A"

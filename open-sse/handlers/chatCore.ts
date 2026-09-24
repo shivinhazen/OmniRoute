@@ -5896,14 +5896,33 @@ export async function handleChatCore({
           "FLUSH_EMPTY_RETRY",
           `${verdict.reason}, bounded retry through the normal credential path`
         );
+        if (managedLease) {
+          log?.warn?.(
+            "FLUSH_EMPTY_RETRY",
+            "managed lease active; skipping account rotation for empty-turn retry"
+          );
+          break;
+        }
+        const currentRetryConnectionId =
+          typeof credentials?.connectionId === "string" && credentials.connectionId.trim().length > 0
+            ? credentials.connectionId.trim()
+            : null;
         const nextCreds = await getProviderCredentials(
           provider,
-          null,
+          currentRetryConnectionId,
           null,
           currentModel
         ).catch(() => null);
         if (!nextCreds?.connectionId) break;
         const retryConnectionId = String(nextCreds.connectionId);
+        const previousCredentials = { ...(credentials as Record<string, unknown>) };
+        const restoreCredentials = () => {
+          const currentCredentials = credentials as Record<string, unknown>;
+          for (const key of Object.keys(currentCredentials)) {
+            if (!(key in previousCredentials)) delete currentCredentials[key];
+          }
+          Object.assign(credentials, previousCredentials);
+        };
         Object.assign(credentials, nextCreds);
         log?.info?.("FLUSH_EMPTY_RETRY", `retrying on ${retryConnectionId}`);
         await providerResponse.body?.cancel().catch(() => {});
@@ -5911,11 +5930,13 @@ export async function handleChatCore({
         try {
           retryResult = await executeProviderRequest(currentModel, false);
         } catch {
+          restoreCredentials();
           break;
         }
         const retryResponse = (retryResult as { response?: Response })?.response;
         if (!retryResponse?.ok || !retryResponse.body) {
           if (retryResponse) await retryResponse.body?.cancel().catch(() => {});
+          restoreCredentials();
           break;
         }
         const prepared = await maybeConvertJsonBodyToSse(retryResponse, {
@@ -5935,6 +5956,7 @@ export async function handleChatCore({
         const preparedStream = ready && ready.ok ? ready.response : null;
         if (!preparedStream) {
           await retryResponse.body?.cancel().catch(() => {});
+          restoreCredentials();
           break;
         }
         // Swap BEFORE re-classifying so the next loop iteration reads the retry.

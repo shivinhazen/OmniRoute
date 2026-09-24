@@ -207,20 +207,45 @@ test("persistent empty turns exhaust the budget with exactly 5 dispatches", asyn
   );
 });
 
-test("single slot retries the same account and serves content", async () => {
+test("single slot does not retry when the current connection is excluded", async () => {
   await seedGemini("gemini-lone", "sk-flush-lone");
   const dispatches: string[] = [];
   stubFetch(dispatches, (_auth, callIndex) =>
     callIndex === 0 ? reasoningOnlyStreamResponse() : contentStreamResponse("served-after-retry")
   );
   const response = await handleChat(streamRequest());
-  const bodyText = await drainText(response);
+  await drainText(response);
   assert.equal(
     dispatches.length,
-    2,
-    `single slot replays the same account, got ${dispatches.length}`
+    1,
+    `single slot must not replay the excluded connection, got ${dispatches.length}`
   );
-  assert.match(bodyText, /served-after-retry/, "client must receive the retry content");
+});
+
+test("failed retry keeps selected connection aligned with the original response", async () => {
+  const first = await seedGemini("gemini-fallback-a", "sk-flush-fallback-a");
+  const second = await seedGemini("gemini-fallback-b", "sk-flush-fallback-b");
+  const dispatches: string[] = [];
+  stubFetch(dispatches, (_auth, callIndex) =>
+    callIndex === 0
+      ? reasoningOnlyStreamResponse()
+      : new Response("retry failure", { status: 503, headers: { "Content-Type": "text/plain" } })
+  );
+  const response = await handleChat(streamRequest());
+  await drainText(response);
+  assert.equal(dispatches.length, 2, `expected initial + 1 retry, got ${dispatches.length}`);
+  assert.match(dispatches[0], /sk-flush-fallback-a/);
+  assert.match(dispatches[1], /sk-flush-fallback-b/);
+  assert.equal(
+    response.headers.get("X-OmniRoute-Selected-Connection-Id"),
+    first.id,
+    "fallback to the original response must keep credentials on the original connection"
+  );
+  assert.notEqual(
+    response.headers.get("X-OmniRoute-Selected-Connection-Id"),
+    second.id,
+    "retry credentials must not remain selected when retry output is discarded"
+  );
 });
 
 test("a stream that drops before anything reaches the client retries and serves content", async () => {
